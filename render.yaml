@@ -1,0 +1,22 @@
+# Blueprint Render - service Web Node (next start). Aucune valeur secrete ici : renseignez-les dans le tableau de bord Render.
+services:
+  - type: web
+    name: smartcity-rdc-2035
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: NEXT_PUBLIC_DEMO_MODE
+        value: "false"
