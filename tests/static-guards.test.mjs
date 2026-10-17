@@ -127,3 +127,87 @@ test('025 : un client ne peut pas poser verified=true ; seule l\'Edge Function (
   assert.ok(h.includes('reporter_id=eq.') && h.includes('sniffImage') && h.includes('failOpen: false'));
   assert.ok(read('supabase/functions/ai-service/handler.ts').includes('verified=eq.true'));
 });
+
+// ---------------------------------------------------------------------------
+// 026 — validation humaine des suggestions Gemini (garde-fous statiques ; le comportement SQL réel est dans
+// database/tests/test_ai_decisions.sql, le comportement des routes dans supabase/functions/ai-service/decisions.test.ts)
+// ---------------------------------------------------------------------------
+const mig026 = () => read('supabase/migrations/20261017100000_026_ai_suggestion_decisions.sql').replace(/--.*$/gm, '');
+
+test('026 : migration additive — ni DROP TABLE/COLUMN, ni TRUNCATE, ni DELETE, ni RLS désactivée', () => {
+  const sql = mig026();
+  assert.ok(!/DROP\s+TABLE|DROP\s+COLUMN|TRUNCATE|DELETE\s+FROM|DISABLE\s+ROW\s+LEVEL/i.test(sql));
+  assert.ok(/ALTER TABLE public\.ai_suggestion_decisions ENABLE ROW LEVEL SECURITY/.test(sql));
+  assert.ok(!/UPDATE\s+public\.(ai_predictions|profiles)\b/i.test(sql), 'la migration ne doit modifier aucune donnée existante hors signalement appliqué par la fonction');
+});
+
+test('026 : historique lisible par le personnel seulement, AUCUNE politique d\'écriture, droits retirés à anon/authenticated', () => {
+  const sql = mig026();
+  const policies = [...sql.matchAll(/CREATE POLICY[^;]*;/g)].map((m) => m[0]);
+  assert.equal(policies.length, 1);
+  assert.ok(/FOR SELECT TO authenticated USING \(public\.is_staff\(\)\)/.test(policies[0]));
+  assert.ok(/REVOKE ALL ON public\.ai_suggestion_decisions FROM PUBLIC, anon, authenticated/.test(sql));
+  assert.ok(/GRANT SELECT ON public\.ai_suggestion_decisions TO authenticated/.test(sql));
+  assert.ok(!/GRANT\s+(INSERT|UPDATE|DELETE|ALL)[^;]*TO[^;]*authenticated/i.test(sql));
+});
+
+test('026 : fonction atomique SECURITY DEFINER épinglée, appelable par service_role uniquement', () => {
+  const sql = mig026();
+  const fn = sql.slice(sql.indexOf('CREATE OR REPLACE FUNCTION public.apply_ai_suggestion_decision'));
+  assert.ok(/SECURITY DEFINER SET search_path = public, extensions/.test(fn));
+  assert.ok(/REVOKE ALL ON FUNCTION public\.apply_ai_suggestion_decision\([^)]*\)\s+FROM PUBLIC, anon, authenticated/.test(fn));
+  assert.ok(/GRANT EXECUTE ON FUNCTION public\.apply_ai_suggestion_decision\([^)]*\)\s+TO service_role/.test(fn));
+  assert.ok(!/GRANT EXECUTE[^;]*\b(anon|authenticated)\b/.test(fn));
+  // verrous + contrôles obligatoires
+  for (const needle of ['FOR UPDATE', 'report_changed', 'already_decided', 'priority_decrease_forbidden', 'priority_decrease_unconfirmed', 'request_id_conflict', 'forbidden']) {
+    assert.ok(fn.includes(needle), `contrôle manquant : ${needle}`);
+  }
+  assert.ok(/UNIQUE \(prediction_id\)/.test(sql) && /UNIQUE \(request_id\)/.test(sql));
+});
+
+test('026 : rôles autorisés à baisser une priorité identiques en SQL et dans l\'Edge Function', () => {
+  const sql = mig026();
+  const sqlRoles = sql.match(/v_lower_roles\s+text\[\] := ARRAY\[([^\]]+)\]/)[1].match(/'(\w+)'/g).map((x) => x.replaceAll("'", "")).sort();
+  const ts = read('supabase/functions/ai-service/decisions.ts');
+  const tsRoles = ts.match(/LOWER_PRIORITY_ROLES = \[([^\]]+)\]/)[1].match(/"(\w+)"/g).map((x) => x.replaceAll('"', '')).sort();
+  assert.deepEqual(sqlRoles, tsRoles);
+  assert.ok(!sqlRoles.includes('agent') && !sqlRoles.includes('citizen'));
+  const staff = sql.match(/v_staff_roles\s+text\[\] := ARRAY\[([^\]]+)\]/)[1].match(/'(\w+)'/g).map((x) => x.replaceAll("'", "")).sort();
+  const http = read('supabase/functions/_shared/http.ts').match(/STAFF_ROLES = \[([^\]]+)\]/)[1].match(/"(\w+)"/g).map((x) => x.replaceAll('"', '')).sort();
+  assert.deepEqual(staff, http, 'les rôles du personnel doivent rester ceux de STAFF_ROLES / is_staff()');
+});
+
+test('026 : l\'Edge Function ne modifie jamais reports directement ; classify n\'applique rien ; l\'identité vient du jeton', () => {
+  const dec = read('supabase/functions/ai-service/decisions.ts');
+  assert.ok(!/\/rest\/v1\/reports[^`"']*`?[^;]*method:\s*"(PATCH|POST|PUT|DELETE)"/.test(dec));
+  assert.ok(dec.includes('p_actor_id: userId'));
+  assert.ok(!/body\.(actor_id|user_id|decided_by)|b\.(actor_id|user_id|decided_by)/.test(dec));
+  const h = read('supabase/functions/ai-service/handler.ts');
+  const classify = h.slice(h.indexOf('async function classifyReport'), h.indexOf('export async function handle'));
+  assert.ok(!/PATCH/.test(classify) && !/\/rest\/v1\/reports[^`"']*`[^)]*method/.test(classify), 'classify ne doit rien écrire dans reports');
+  assert.ok(classify.includes('return=representation'));
+});
+
+test('026 : interface — pas d\'écriture directe, garde anti double clic, clé d\'idempotence, confirmation de baisse, libellés', () => {
+  const ui = read('components/dashboard/ai-suggestion-review.tsx');
+  const page = read('app/dashboard/ai/page.tsx');
+  for (const src of [ui, page]) {
+    assert.ok(!/\.from\(['"](reports|ai_suggestion_decisions|ai_predictions)['"]\)\s*\.(update|insert|upsert|delete)/.test(src), 'écriture directe depuis le navigateur interdite');
+  }
+  assert.ok(ui.includes('inFlight.current') && ui.includes('requestId.current') && ui.includes('disabled={submitting'));
+  assert.ok(ui.includes('confirm_priority_decrease') && ui.includes('confirmDecrease'));
+  assert.ok(ui.includes('/decision') && ui.includes('expected:'));
+  for (const label of ['Accepter', 'Modifier', 'Rejeter', 'Valeurs actuellement enregistrées', 'Suggestion de Gemini']) {
+    assert.ok(ui.includes(label), `libellé manquant : ${label}`);
+  }
+  assert.ok(page.includes('AiSuggestionReview') && page.includes("'/decisions'"));
+  assert.ok(!ui.includes('Math.random'));
+});
+
+test('026 : scripts SQL consolidés régénérés avec la migration 026 ; modèle et secrets Gemini inchangés', () => {
+  for (const f of ['INSTALLATION_BASE_VIDE.sql', 'REPARATION_BASE_EXISTANTE.sql']) {
+    assert.ok(read(`database/${f}`).includes('apply_ai_suggestion_decision'), `${f} n'inclut pas la migration 026 : relancer python3 database/build_sql.py`);
+  }
+  const g = read('supabase/functions/ai-service/gemini.ts');
+  assert.ok(g.includes('GEMINI_API_KEY') && g.includes('AI_MODEL') && g.includes('x-goog-api-key'));
+});

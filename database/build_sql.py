@@ -87,7 +87,7 @@ def body(idem):
 
 INSTALL_HEAD = """-- =====================================================================================
 -- SMART CITY RDC 2035 — INSTALLATION INITIALE (BASE VIDE)           [FICHIER GÉNÉRÉ — ne pas éditer]
--- Source : supabase/migrations/*.sql (001 → 025) via database/build_sql.py
+-- Source : supabase/migrations/*.sql (001 → 026) via database/build_sql.py
 --
 -- ⚠ À exécuter UNIQUEMENT sur une base Supabase VIDE (nouveau projet).
 --   Le script s'arrête de lui-même si public.profiles ou public.reports existent déjà.
@@ -109,7 +109,7 @@ $guard$;
 
 REPAIR_HEAD = """-- =====================================================================================
 -- SMART CITY RDC 2035 — RÉPARATION / MISE À NIVEAU (BASE EXISTANTE OU PARTIELLE)   [FICHIER GÉNÉRÉ — ne pas éditer]
--- Source : supabase/migrations/*.sql (001 → 025) via database/build_sql.py
+-- Source : supabase/migrations/*.sql (001 → 026) via database/build_sql.py
 --
 -- Principe : rejoue la chaîne de migrations sous forme IDEMPOTENTE (CREATE ... IF NOT EXISTS, ADD COLUMN IF NOT
 --   EXISTS, CREATE OR REPLACE, DROP POLICY/TRIGGER IF EXISTS avant recréation). L'état final est celui des migrations.

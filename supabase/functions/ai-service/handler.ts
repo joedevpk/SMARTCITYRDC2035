@@ -8,6 +8,7 @@ import {
 } from "./gemini.ts";
 import { serviceKey, supabaseUrl } from "../_shared/http.ts";
 import { sniffImage } from "../_shared/sniff.ts";
+import { decideSuggestion, getSuggestion, listDecisions } from "./decisions.ts";
 
 // ---------------------------------------------------------------------------
 // ai-service (handler testable ; le point d'entrée Deno.serve est dans index.ts)
@@ -18,6 +19,7 @@ import { sniffImage } from "../_shared/sniff.ts";
 //  - /detect/anomalies     : z-score sur télémétrie réelle
 //  - /analyze/incidents    : comptages sur lignes réelles (non démo)
 //  - /predictions          : historique (personnel autorisé uniquement)
+//  - /suggestions/:id, /suggestions/:id/decision, /decisions : validation humaine des suggestions Gemini (decisions.ts)
 // Rien n'est enregistré comme « IA » sauf si cela vient réellement du modèle.
 //
 // Contrôle d'accès : toutes les routes exigent un jeton Supabase valide, un profil actif et un rôle de
@@ -239,6 +241,7 @@ async function classifyReport(req: Request, userId: string) {
 
   const saved = await rest("/rest/v1/ai_predictions", {
     method: "POST",
+    headers: { Prefer: "return=representation" },   // récupère l'id : la validation humaine s'y rattache
     body: JSON.stringify({
       model: "report_classification", target_type: "report", target_id: report.id,
       prediction: suggestion, confidence: null,
@@ -246,8 +249,10 @@ async function classifyReport(req: Request, userId: string) {
     }),
   });
   if (!saved.ok) console.error("ai-service: ai_predictions insert failed, HTTP", saved.status);
+  const savedId = saved.ok && Array.isArray(saved.data) && isUuid(saved.data[0]?.id) ? saved.data[0].id : null;
   return json({
     model: "report_classification",
+    prediction_id: savedId,   // null si la suggestion n'a pas pu être enregistrée : elle ne peut alors pas être validée
     provider: "gemini", llm_model: model,
     requires_human_review: true,
     // Transparence : combien d'images Gemini a RÉELLEMENT reçues (0 = analyse sur le texte seul).
@@ -313,6 +318,14 @@ export async function handle(req: Request): Promise<Response> {
         by_type: tally("type"), by_severity: tally("severity"), by_status: tally("status"),
         note: rows.length === 0 ? "Aucun incident réel enregistré." : undefined }, 200, req);
     }
+
+    // ---- Validation humaine des suggestions Gemini (accepter / modifier / rejeter) ----
+    const sm = path.match(/^\/suggestions\/([0-9a-f-]{36})(\/decision)?$/i);
+    if (sm && isUuid(sm[1])) {
+      if (!sm[2] && req.method === "GET") return await getSuggestion(req, sm[1], role);
+      if (sm[2] && req.method === "POST") return await decideSuggestion(req, sm[1], user.id, role);
+    }
+    if (path === "/decisions" && req.method === "GET") return await listDecisions(req);
 
     if (path === "/predictions" && req.method === "GET") {
       const model = oneOf(url.searchParams.get("model"),

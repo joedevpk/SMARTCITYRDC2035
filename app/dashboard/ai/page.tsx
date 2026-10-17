@@ -8,6 +8,7 @@ import { EmptyState, SimulationBadge } from '@/components/dashboard/data-provena
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { RoleGuard } from '@/components/auth/role-guard';
+import { AiSuggestionReview } from '@/components/dashboard/ai-suggestion-review';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase/client';
 
 const baseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -54,10 +55,17 @@ export default function AIDashboard() {
   const [running, setRunning] = useState<string | null>(null);
   const [results, setResults] = useState<Record<string, CallResult>>({});
   const [history, setHistory] = useState<any[]>([]);
+  // Validation humaine : suggestion actuellement ouverte + décisions déjà enregistrées (prediction_id → décision)
+  const [reviewId, setReviewId] = useState<string | null>(null);
+  const [decisions, setDecisions] = useState<Record<string, string>>({});
 
   const loadHistory = useCallback(async () => {
     const r = await callAI('/predictions', 'GET');
     if (r.ok) setHistory(r.data.data ?? []);
+    const d = await callAI('/decisions', 'GET');
+    if (d.ok && Array.isArray(d.data.data)) {
+      setDecisions(Object.fromEntries(d.data.data.map((x: { prediction_id: string; decision: string }) => [x.prediction_id, x.decision])));
+    }
   }, []);
 
   useEffect(() => {
@@ -77,7 +85,10 @@ export default function AIDashboard() {
     if (!selectedId) return;
     setClassifying(true);
     setClassification(null);
-    setClassification(await callAI('/classify-report', 'POST', { report_id: selectedId }));
+    setReviewId(null);
+    const res = await callAI('/classify-report', 'POST', { report_id: selectedId });
+    setClassification(res);
+    if (res.ok && typeof res.data?.prediction_id === 'string') setReviewId(res.data.prediction_id);
     setClassifying(false);
     loadHistory();
   };
@@ -137,7 +148,8 @@ export default function AIDashboard() {
               {classification.data?.message ?? classification.data?.error ?? `Erreur HTTP ${classification.status}`}
             </p>
           )}
-          {suggestion && (
+          {reviewId && <AiSuggestionReview key={reviewId} predictionId={reviewId} call={callAI} onDecided={loadHistory} />}
+          {suggestion && !reviewId && (
             <div className="mt-4 space-y-3 rounded-lg border border-border bg-muted/30 p-4 text-sm">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge>Catégorie proposée : {suggestion.category}</Badge>
@@ -151,6 +163,7 @@ export default function AIDashboard() {
               <div><strong>Hypothèses :</strong><ul className="ml-5 list-disc">{suggestion.assumptions.map((f: string, i: number) => <li key={i}>{f}</li>)}</ul></div>
               <p><strong>Recommandation :</strong> {suggestion.recommendation}</p>
               <p className="text-xs text-warning">Suggestion générée par un modèle : à valider par un agent avant toute décision.</p>
+              <p role="alert" className="text-xs text-destructive">Cette suggestion n’a pas pu être enregistrée : la validation (accepter / modifier / rejeter) est impossible. Relancez l’analyse.</p>
             </div>
           )}
         </Card>
@@ -206,7 +219,17 @@ export default function AIDashboard() {
               {history.map((h) => (
                 <div key={h.id} className="flex items-center justify-between rounded-lg border border-border p-3 text-sm">
                   <span>{h.model}</span>
-                  <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="flex flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
+                    {h.model === 'report_classification' && (
+                      <>
+                        <Badge variant={decisions[h.id] ? 'default' : 'outline'}>
+                          {decisions[h.id] === 'accepted' ? 'Acceptée' : decisions[h.id] === 'modified' ? 'Modifiée' : decisions[h.id] === 'rejected' ? 'Rejetée' : 'À valider'}
+                        </Badge>
+                        <Button size="sm" variant="outline" onClick={() => { setReviewId(h.id); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>
+                          Consulter
+                        </Button>
+                      </>
+                    )}
                     {h.features?.is_llm ? <Badge variant="secondary">LLM</Badge> : <Badge variant="outline">statistique</Badge>}
                     {new Date(h.created_at).toLocaleString('fr-FR')}
                   </span>

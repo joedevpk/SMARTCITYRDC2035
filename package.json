@@ -11,6 +11,7 @@
     "test": "node --experimental-strip-types --test tests/static-guards.test.mjs tests/report-images.test.mjs",
     "test:static": "node --test tests/static-guards.test.mjs",
     "test:edge": "deno test --allow-env supabase/functions/ai-service/",
+    "test:edge:node": "node --import ./tests/deno-shim.mjs --experimental-strip-types --test supabase/functions/ai-service/ai-service.test.ts supabase/functions/ai-service/decisions.test.ts",
     "build:sql": "python3 database/build_sql.py",
     "test:images": "node --experimental-strip-types --test tests/report-images.test.mjs"
   },

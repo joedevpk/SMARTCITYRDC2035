@@ -218,7 +218,8 @@ Deno.test("classify : requête Gemini conforme (URL, x-goog-api-key en en-tête,
   assertEquals(world.inserted.length, 1);
   assertEquals(world.inserted[0].model, "report_classification");
   assertEquals(world.inserted[0].target_id, REPORT_ID);
-  assertEquals(world.inserted[0].features, { provider: "gemini", model: MODEL, is_llm: true, requested_by: USERS["tok-commune"].id });
+  // images_analyzed (0 = texte seul) est écrit par le handler depuis l'ajout de l'analyse d'images : assertion mise à jour.
+  assertEquals(world.inserted[0].features, { provider: "gemini", model: MODEL, is_llm: true, requested_by: USERS["tok-commune"].id, images_analyzed: 0 });
 });
 
 Deno.test("classify : JSON entouré de ```json … ``` accepté ; parties « thought » ignorées", async () => {
